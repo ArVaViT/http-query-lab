@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>HTTP QUERY lab</title></head>
+<body>
+<h1>HTTP QUERY method lab</h1>
+<p>Open the console and run:</p>
+<pre>
+const r = await fetch('/api/echo', {method: 'QUERY', body: '{"q":"hi"}', headers: {'content-type':'application/json'}});
+await r.json();
+</pre>
+</body>
+</html>

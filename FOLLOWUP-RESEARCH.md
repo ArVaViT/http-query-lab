@@ -114,3 +114,38 @@ that normalizes whitespace in the body serves the answer for `{"sig":"a b"}` to 
 `{"sig":"ab"}` when the origin treats the bytes as significant. Exact-body-hash keys (our PoC)
 are safe but can't dedupe semantically-equal queries; "smart" normalization is efficient but
 can serve the wrong response. This is a genuine reason browsers/CDNs punt on QUERY caching.
+
+## 7. Rate dependence: slowing down does NOT help (Vercel)
+
+`local/rate_dependence.mjs`, self-gated (clean IP before each window):
+
+```
+QUERY @ 30s interval -> challenge #1
+QUERY @ 10s interval -> challenge #2
+QUERY @  3s interval -> challenge #2
+QUERY @ 0.4s (burst) -> challenge #3
+```
+
+QUERY draws the challenge within 1-2 requests from a clean IP at every rate down to
+30-second spacing. So Vercel's mitigation is essentially method-driven, not just
+burst-rate; any QUERY traffic is affected, not only floods. Behaviour is noisy /
+probabilistic (occasional 200s slip through, e.g. `[200,200,403,...,200,200,403]`),
+consistent with an adaptive fingerprint mitigation rather than a static allowlist.
+
+## 8. Usable fix: run QUERY today, even behind blocking edges
+
+`local/query_adapter_demo.py` — a transparent client fallback + server middleware:
+
+- Client tries native QUERY; on a 400/403/405 from an intermediary, it retries as
+  `POST` + `X-HTTP-Method-Override: QUERY`.
+- Server middleware treats `POST` + that header as a QUERY.
+
+```
+Direct to origin:              native QUERY -> 200, handled_as QUERY (wire POST=QUERY)
+Through a QUERY-blocking edge:  QUERY 405 -> falls back to POST+override -> 200, handled_as QUERY
+```
+
+The edge only ever sees POST (which every CDN forwards), while the app still handles a
+QUERY. ~60 lines. This defeats the entire method-allowlist class of edge blocks today,
+at the cost of losing native QUERY cacheability at the edge (the request is a POST on
+the wire) — a fine trade until the edge method tables catch up.

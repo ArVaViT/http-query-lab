@@ -224,3 +224,35 @@ forced = body-blind collisions (wrong answers). This is RFC 10008 §4's "false p
 as a concrete cache-poisoning primitive in production-grade software. Our ~40-line PoC
 (`query_cache_proxy.py`) is safe precisely because it keys on `sha256(body)` — the thing
 existing caches don't do.
+
+## 12. The same law at every layer (second research wave, 21 agents total + measured)
+
+The "a method-allowlist written before QUERY existed is now a QUERY bug" law recurs at every layer:
+
+- **Client retries (MEASURED, `local/retry_test.py`):** urllib3's default retry allowlist is
+  `{GET,HEAD,PUT,DELETE,OPTIONS,TRACE}` — no QUERY. A GET that 503s is retried; an identical
+  QUERY is **not** (fails on the first 503), even though QUERY is idempotent and the safest thing
+  to retry. Go's auto-retry is *safe-methods-only* (GET/HEAD/OPTIONS/TRACE) yet still omits QUERY.
+  undici shipped QUERY-aware retries 2026-07-02. "Careless" method-blind retriers accidentally do
+  the right thing; "careful" allowlist retriers do the wrong thing.
+- **Observability:** OpenTelemetry buckets unknown methods into `_OTHER`. Java & Go OTel agents
+  emit `http.request.method=_OTHER` for QUERY; Python & JS emit `QUERY`. Same IANA method, four
+  SDK verdicts. Prometheus client_golang ships `NOTIFY` in its allowlist but not QUERY. QUERY
+  traffic can silently vanish from per-method dashboards/SLOs.
+- **CORS** (measured, §10): hardcoded `Access-Control-Allow-Methods: GET, POST` blocks it.
+- **OpenAPI:** 3.1 can't even name a QUERY operation (fixed method set); 3.2 (Sept 2025) adds a
+  `query` fixed field. Codegen (openapi-generator) still drops it; SmartBear ships 3.2 in JS but
+  not Java; ASP.NET backports via `x-oai-additionalOperations`.
+- **Security intent:** QUERY was sold as making read-vs-write intent legible to WAFs. Punchline:
+  the signal exists and *nothing reads it* — WAFs match literal method strings, not "is-safe".
+  Django CSRF treats QUERY as UNSAFE (stricter than GET). And moving a secret from URL to a
+  *cacheable* body can leak it into a shared cache — a net-negative privacy trade.
+- **Cache poisoning (theory behind §11's live Varnish result):** RFC §2.7 re-opens a decade of
+  PortSwigger web-cache-entanglement one layer down, at the JSON body, where there is no canonical
+  form. Over-normalization (not under-) is the dangerous direction; the attacker even controls
+  whether the cache canonicalizes, via the `+json` Content-Type suffix. Gadgets: duplicate JSON
+  keys (cache first-wins vs origin last-wins), f64 number-precision collisions on bigint IDs,
+  Unicode NFKC collisions. Our live Varnish result (§11) is a working instance of this class.
+- **Request smuggling:** QUERY is natively a CL.0-style vector — prior desyncs fight over *where*
+  a body ends; QUERY splits hops on *whether there is a body at all*. Varnish's pipe strips
+  frontend protections; idempotency makes a smuggled QUERY safe for proxies to replay.

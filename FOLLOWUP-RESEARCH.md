@@ -180,3 +180,22 @@ infra forwards.*
 **Server frameworks route AND read QUERY bodies** (`local/receive_side.*`): Express, Fastify
 (after `addHttpMethod`), and FastAPI all route a QUERY request and read its body — the
 "body-gated on POST/PUT" worry did not materialize. The origin side is ready; the edge is the gap.
+
+## 10. Cross-origin QUERY: another allowlist choke point (measured, 3 engines)
+
+QUERY is not CORS-safelisted, so a cross-origin QUERY always triggers a preflight.
+`local/cors_study.py` (Chromium/Firefox/WebKit, identical results):
+
+| Server's Access-Control-Allow-Methods | Cross-origin QUERY |
+|---|---|
+| `GET, POST, QUERY` | works |
+| `GET, POST` (no QUERY) | **BLOCKED** at preflight |
+| `*` (no credentials) | works |
+| `*` + credentials | **BLOCKED** (`*` is invalid with credentials) |
+| `GET, POST, QUERY` + credentials | works |
+
+Consequence: any API that hardcodes `Access-Control-Allow-Methods: GET, POST` silently
+blocks cross-origin QUERY in the browser even if the origin server handles the method,
+and credentialed QUERY can't rely on `*` — it must name QUERY explicitly. Same "a list
+written before QUERY exists is now a bug," now in the CORS layer. Invisible to same-origin
+curl testing.

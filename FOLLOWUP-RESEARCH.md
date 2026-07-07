@@ -199,3 +199,28 @@ blocks cross-origin QUERY in the browser even if the origin server handles the m
 and credentialed QUERY can't rely on `*` — it must name QUERY explicitly. Same "a list
 written before QUERY exists is now a bug," now in the CORS layer. Invisible to same-origin
 curl testing.
+
+## 11. HEADLINE: forcing Varnish to cache QUERY = live cache poisoning
+
+The RFC §4 hazard, demonstrated in real Varnish 7.1 (`local/varnish_cache_test.sh`, in WSL).
+Default Varnish *pipes* QUERY (uncached). Force it to cache with custom VCL and:
+
+```
+Direct to origin (control):  QUERY {"a":1}  -> token#1 for body={"a":1}   (origin sees the body)
+Through Varnish (cached):
+  QUERY {"a":1}    -> token#2  body=          MISS  (Varnish DROPPED the request body)
+  QUERY {"a":1}    -> token#2  body=          HIT
+  QUERY {"a":999}  -> token#2  body=          HIT   <-- served {"a":1}'s response for {"a":999}
+```
+
+The direct-origin control proves it's Varnish, not the test: two things happen when Varnish
+caches QUERY. (1) It **strips the request body** on the cacheable backend fetch (origin sees an
+empty body via Varnish but the full body when hit directly), so the origin can't even compute
+the right answer. (2) Its cache key is **URL-only** (vcl_hash omits the body), so every same-URL
+QUERY collapses to one entry — `{"a":999}` got `{"a":1}`'s cached response, no re-fetch.
+
+So a real production cache cannot cache QUERY correctly: default = pipe (no caching at all),
+forced = body-blind collisions (wrong answers). This is RFC 10008 §4's "false positive" hazard
+as a concrete cache-poisoning primitive in production-grade software. Our ~40-line PoC
+(`query_cache_proxy.py`) is safe precisely because it keys on `sha256(body)` — the thing
+existing caches don't do.

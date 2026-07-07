@@ -79,3 +79,38 @@ Open question: is the Vercel challenge purely burst-rate, or method-driven at an
 Preliminary: QUERY spaced at 30s still draws challenges (noisy, some slip through), which
 argues against "slow traffic is safe." Full rate sweep + stability repeats pending
 (`local/rate_dependence.mjs`). Not concluding until replicated.
+
+## 6. Why do edges block QUERY? (hypothesis-tested)
+
+**H1 — edges block QUERY because it isn't in their method tables yet, not for security.**
+Test (`local/method_age.mjs`): compare verbs by age with a garbage control, FOOBAR:
+PROPFIND (1999) / SEARCH (2008) / QUERY (2026) / FOOBAR (never registered).
+
+```
+CloudFront   PROPFIND=403  SEARCH=403  QUERY=403  FOOBAR=403   (identical -> hard allowlist)
+Akamai/cisco PROPFIND=501  SEARCH=400  QUERY=400  FOOBAR=400   (DISTINGUISHES)
+Akamai/apple PROPFIND=403(origin)      QUERY=400  FOOBAR=400   (forwards known, kills unknown)
+Cloudflare   PROPFIND=200  SEARCH=200  QUERY=200  FOOBAR=501   (forwards registered, rejects garbage)
+Google/Netlify/Bunny  all 405 (no distinction)
+Fastly       PROPFIND=405  SEARCH=502  QUERY=502  FOOBAR=502   (origin-dependent)
+```
+
+The FOOBAR control is the clincher: on the "method-table" edges, **QUERY is treated like the
+garbage verb FOOBAR, not like the old-but-known PROPFIND.** Akamai is the clearest case: it
+returns `501 Not Implemented` for PROPFIND (a verb it knows) but `400 Bad Request` for
+QUERY/SEARCH/FOOBAR (tokens it doesn't). So QUERY is blocked because the edge's method table
+predates June 2026, not because of any security policy. RFC 10008 says nothing about how
+unrecognizing intermediaries should behave, and does not flag WAF/edge rejection at all
+(read from the RFC text, §4 + §5) — the transition gap is real and unaddressed.
+
+**Status code is itself diagnostic of the mechanism:**
+`400` = can't parse the method (unknown token) · `501` = known method, not implemented ·
+`405` = valid method, not allowed here · `403` = forbidden by policy / hard allowlist.
+
+**H2 — QUERY caching has a real correctness hazard, it isn't only "unimplemented."**
+RFC 10008 §4: "Caches that normalize QUERY content ... can return an incorrect response if
+normalization results in a false positive." Demonstrated (`local/cache_hazard.py`): a cache
+that normalizes whitespace in the body serves the answer for `{"sig":"a b"}` to a request for
+`{"sig":"ab"}` when the origin treats the bytes as significant. Exact-body-hash keys (our PoC)
+are safe but can't dedupe semantically-equal queries; "smart" normalization is efficient but
+can serve the wrong response. This is a genuine reason browsers/CDNs punt on QUERY caching.

@@ -149,3 +149,34 @@ The edge only ever sees POST (which every CDN forwards), while the app still han
 QUERY. ~60 lines. This defeats the entire method-allowlist class of edge blocks today,
 at the cost of losing native QUERY cacheability at the edge (the request is a POST on
 the wire) — a fine trade until the edge method tables catch up.
+
+## 9. Measured corrections (real tests beat doc-research)
+
+**Client method normalization (measured on the wire, `local/norm_matrix.py` + `norm_clients.mjs`):**
+sending the string `query` to each client, what actually hits the wire:
+
+| Sends `query` verbatim (lowercase) | Uppercases to `QUERY` |
+|---|---|
+| fetch/undici, curl -X, Python urllib | Python requests, httpx, axios, got, Node http.request |
+
+So there are **two** wire outcomes, not three. `fetch`/`undici` is the real bug magnet
+(lowercase `query` != IANA `QUERY`). Doc-research had claimed httpx is "verbatim" and axios
+"risks lowercase" — both WRONG by measurement: httpx and axios both uppercase to `QUERY`.
+
+**Open-source proxies all FORWARD QUERY (real nginx/Varnish/HAProxy in WSL, `local/proxy_test.sh`):**
+
+```
+nginx    QUERY -> 200  origin-saw:QUERY
+varnish  QUERY -> 200  origin-saw:QUERY   (forwarded via pipe; uncached, NOT blocked)
+haproxy  QUERY -> 200  origin-saw:QUERY
+```
+
+Corrects the "Varnish breaks QUERY" framing: Varnish default-VCL *pipes* an unknown method
+to the backend, so QUERY reaches the origin (just without caching) — it is not blocked. The
+real blockers are the **proprietary managed edges** (CloudFront/Akamai/Google/Netlify/Bunny/
+Vercel), not configurable open-source proxies. Refined thesis: *managed CDN blocks, open-source
+infra forwards.*
+
+**Server frameworks route AND read QUERY bodies** (`local/receive_side.*`): Express, Fastify
+(after `addHttpMethod`), and FastAPI all route a QUERY request and read its body — the
+"body-gated on POST/PUT" worry did not materialize. The origin side is ready; the edge is the gap.
